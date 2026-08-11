@@ -1,11 +1,18 @@
 import { jsonError, jsonOk } from "@/lib/http";
-import { getProjectVersions } from "@/lib/store";
+import { getCurrentUser } from "@/lib/auth";
+import { getProject, getProjectVersions } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ projectId: string }> }) {
   try {
     const { projectId } = await params;
+    const user = await getCurrentUser(_request);
+    const project = await getProject(projectId);
+    if (!project) return jsonError(new Error("Project not found"), 404);
+    if (project.visibility === "private" && project.ownerId !== user.id) {
+      return jsonError(new Error("Project not found"), 404);
+    }
     const versions = await getProjectVersions(projectId);
     return jsonOk({ versions });
   } catch (error) {

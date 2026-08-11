@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { getCurrentUser } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
-import { rollbackVersion, readArtifact } from "@/lib/store";
+import { getProject, rollbackVersion, readArtifact } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   try {
     const body = requestSchema.parse(await request.json());
     const { projectId } = await params;
+    const user = await getCurrentUser(request);
+    const project = await getProject(projectId);
+    if (!project || project.ownerId !== user.id) return jsonError(new Error("Project not found"), 404);
     const result = await rollbackVersion(projectId, body.versionId);
     const html = await readArtifact(result.version);
     return jsonOk({ ...result, html });

@@ -6,12 +6,15 @@ import {
   Check,
   Clock3,
   Code2,
+  Compass,
   Copy,
   ExternalLink,
   Gamepad2,
+  Github,
   GitFork,
   Image as ImageIcon,
   Library,
+  LogOut,
   Play,
   Plus,
   RefreshCcw,
@@ -21,8 +24,9 @@ import {
   Sparkles,
   UserCircle
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AssetRef, GenerationMode, GenerationRun, PlayableVersion, Project, Template } from "@/types/domain";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AssetRef, GenerationMode, GenerationRun, PlayableVersion, Project, Template, User } from "@/types/domain";
 
 interface StudioProps {
   templates: Template[];
@@ -41,11 +45,16 @@ interface ProjectResponse {
   project: Project;
   versions: PlayableVersion[];
   currentVersion: PlayableVersion | null;
+  currentVersionThumbnailUrl?: string;
   html: string;
 }
 
+interface ProjectListItem extends Project {
+  currentVersionThumbnailUrl?: string;
+}
+
 interface ProjectsResponse {
-  projects: Project[];
+  projects: ProjectListItem[];
   stats: {
     projectCount: number;
     versionCount: number;
@@ -53,6 +62,26 @@ interface ProjectsResponse {
     remixCount: number;
   };
 }
+
+interface GenerationEnqueueResponse {
+  runId: string;
+  status: GenerationRun["status"];
+  run: GenerationRun;
+}
+
+interface GenerationResultResponse {
+  run: GenerationRun;
+  project: Project | null;
+  version: PlayableVersion | null;
+  html: string;
+}
+
+interface MeResponse {
+  user: User;
+  authenticated: boolean;
+}
+
+const activeRunStorageKey = "sparkplay.activeRunId";
 
 export function Studio({ templates }: StudioProps) {
   const [tab, setTab] = useState<Tab>("create");
@@ -62,7 +91,7 @@ export function Studio({ templates }: StudioProps) {
   const [versions, setVersions] = useState<PlayableVersion[]>([]);
   const [currentVersion, setCurrentVersion] = useState<PlayableVersion | null>(null);
   const [html, setHtml] = useState("");
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [stats, setStats] = useState<ProjectsResponse["stats"]>({
     projectCount: 0,
     versionCount: 0,
@@ -79,6 +108,11 @@ export function Studio({ templates }: StudioProps) {
   const [controlWidth, setControlWidth] = useState(348);
   const [gameTabs, setGameTabs] = useState<GameTab[]>([]);
   const [activeGameTabId, setActiveGameTabId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [libraryError, setLibraryError] = useState("");
+  const resumeAttemptedRef = useRef(false);
 
   const activeProjectId = project?.id;
 
@@ -90,29 +124,117 @@ export function Studio({ templates }: StudioProps) {
   }, []);
 
   const loadProject = useCallback(async (projectId: string) => {
-    const response = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
-    if (!response.ok) return;
-    const data = (await response.json()) as ProjectResponse;
+    setLoadingProjectId(projectId);
+    setLibraryError("");
+    setStatus("正在打开作品");
+    try {
+      const response = await fetch(`/api/projects/${projectId}`, { cache: "no-store" });
+      const data = (await response.json()) as ProjectResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "打开作品失败");
+      setProject(data.project);
+      setVersions(data.versions);
+      setCurrentVersion(data.currentVersion);
+      setHtml(data.html);
+      setShareUrl("");
+      setActiveGameTabId(null);
+      setStatus(`已打开：${data.project.title}`);
+      setTab("create");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "打开作品失败";
+      setLibraryError(message);
+      setStatus(message);
+    } finally {
+      setLoadingProjectId(null);
+    }
+  }, []);
+
+  const applyGenerationResult = useCallback((data: {
+    project: Project;
+    version: PlayableVersion;
+    run: GenerationRun;
+    html: string;
+  }) => {
     setProject(data.project);
-    setVersions(data.versions);
-    setCurrentVersion(data.currentVersion);
+    setCurrentVersion(data.version);
+    setVersions((prev) => [data.version, ...prev.filter((item) => item.id !== data.version.id)]);
     setHtml(data.html);
+    setLastRun(data.run);
     setShareUrl("");
     setActiveGameTabId(null);
-    setTab("create");
   }, []);
+
+  const pollGenerationResult = useCallback(async (runId: string): Promise<{
+    project: Project;
+    version: PlayableVersion;
+    run: GenerationRun;
+    html: string;
+  }> => {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 180_000) {
+      const response = await fetch(`/api/generations/${runId}`, { cache: "no-store" });
+      const data = (await response.json()) as GenerationResultResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "查询生成任务失败");
+      setLastRun(data.run);
+      setStatus(statusLabel(data.run.status));
+      if (data.run.status === "failed") {
+        throw new Error(data.run.error ?? "生成任务失败");
+      }
+      if (data.run.status === "success") {
+        if (!data.project || !data.version || !data.html) {
+          throw new Error("生成任务完成，但没有找到版本结果");
+        }
+        return {
+          project: data.project,
+          version: data.version,
+          run: data.run,
+          html: data.html
+        };
+      }
+      await sleep(900);
+    }
+    throw new Error("生成任务等待超时，请稍后在作品库中查看");
+  }, []);
+
+  const resumeActiveRun = useCallback(async (runId: string) => {
+    setBusy(true);
+    setStatus("正在恢复未完成生成任务");
+    try {
+      const result = await pollGenerationResult(runId);
+      applyGenerationResult(result);
+      clearStoredActiveRunId();
+      setStatus("已恢复生成结果");
+      await refreshProjects();
+    } catch (error) {
+      clearStoredActiveRunId();
+      setStatus(error instanceof Error ? error.message : "恢复生成任务失败");
+    } finally {
+      setBusy(false);
+    }
+  }, [applyGenerationResult, pollGenerationResult, refreshProjects]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
+      void fetch("/api/me", { cache: "no-store" })
+        .then((response) => response.json() as Promise<MeResponse>)
+        .then((data) => {
+          setCurrentUser(data.user);
+          setAuthenticated(data.authenticated);
+        })
+        .catch(() => undefined);
       void refreshProjects();
       const params = new URLSearchParams(window.location.search);
       const projectId = params.get("project");
       if (projectId) {
         void loadProject(projectId);
       }
+      const activeRunId = readStoredActiveRunId();
+      if (activeRunId && !resumeAttemptedRef.current) {
+        resumeAttemptedRef.current = true;
+        void resumeActiveRun(activeRunId);
+      }
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, [loadProject, refreshProjects]);
+  }, [loadProject, refreshProjects, resumeActiveRun]);
 
   const canGenerate = prompt.trim().length >= 2;
   const currentRegeneratePrompt = prompt.trim() || currentVersion?.manifest.sourcePrompt || "";
@@ -165,10 +287,17 @@ export function Studio({ templates }: StudioProps) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "生成失败");
-      applyGenerationResult(data);
+      const queued = data as GenerationEnqueueResponse;
+      setLastRun(queued.run);
+      setStatus(statusLabel(queued.run.status));
+      writeStoredActiveRunId(queued.runId);
+      const result = await pollGenerationResult(queued.runId);
+      applyGenerationResult(result);
+      clearStoredActiveRunId();
       setStatus("已生成可试玩版本");
       await refreshProjects();
     } catch (error) {
+      clearStoredActiveRunId();
       restorePreview(previousPreview);
       setStatus(error instanceof Error ? error.message : "生成失败");
     } finally {
@@ -195,10 +324,17 @@ export function Studio({ templates }: StudioProps) {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Remix 失败");
-      applyGenerationResult(data);
+      const queued = data as GenerationEnqueueResponse;
+      setLastRun(queued.run);
+      setStatus(statusLabel(queued.run.status));
+      writeStoredActiveRunId(queued.runId);
+      const result = await pollGenerationResult(queued.runId);
+      applyGenerationResult(result);
+      clearStoredActiveRunId();
       setStatus("Remix 已生成新版本");
       await refreshProjects();
     } catch (error) {
+      clearStoredActiveRunId();
       restorePreview(previousPreview);
       setStatus(error instanceof Error ? error.message : "Remix 失败");
     } finally {
@@ -283,21 +419,6 @@ export function Studio({ templates }: StudioProps) {
 
   async function regenerateCurrentPrompt() {
     await generate(currentRegeneratePrompt);
-  }
-
-  function applyGenerationResult(data: {
-    project: Project;
-    version: PlayableVersion;
-    run: GenerationRun;
-    html: string;
-  }) {
-    setProject(data.project);
-    setCurrentVersion(data.version);
-    setVersions((prev) => [data.version, ...prev.filter((item) => item.id !== data.version.id)]);
-    setHtml(data.html);
-    setLastRun(data.run);
-    setShareUrl("");
-    setActiveGameTabId(null);
   }
 
   function applyProjectVersion(data: { project: Project; version: PlayableVersion; html: string }) {
@@ -409,11 +530,15 @@ export function Studio({ templates }: StudioProps) {
           <NavButton active={tab === "account"} icon={<UserCircle size={16} />} label="账户" onClick={() => setTab("account")} />
         </nav>
         <div className="header-actions">
-          <span className="mini-pill">{modeLabel(mode)}</span>
+          <Link className="discover-link" href="/discover">
+            <Compass size={15} />
+            发现
+          </Link>
           <button className="new-project-button" type="button" onClick={newProject}>
             <Plus size={15} />
             新建项目
           </button>
+          <span className="mini-pill">模式：{modeLabel(mode)}</span>
           <div className="status-strip">
             <ShieldCheck size={15} />
             <span>{status}</span>
@@ -586,15 +711,26 @@ export function Studio({ templates }: StudioProps) {
 
         {tab === "library" && (
           <section className="content-list">
+            {libraryError && <div className="inline-error">{libraryError}</div>}
             {projects.map((item) => (
               <article className="library-item" key={item.id}>
-                <div>
+                <div className="library-thumb" aria-hidden="true">
+                  {item.currentVersionThumbnailUrl ? (
+                    <span
+                      className="library-thumb-image"
+                      style={{ backgroundImage: `url(${item.currentVersionThumbnailUrl})` }}
+                    />
+                  ) : (
+                    <ImageIcon size={22} />
+                  )}
+                </div>
+                <div className="library-info">
                   <p className="eyebrow">{item.visibility}</p>
                   <h2>{item.title}</h2>
                   <span>{item.description}</span>
                 </div>
-                <button type="button" onClick={() => loadProject(item.id)}>
-                  打开
+                <button type="button" disabled={loadingProjectId === item.id} onClick={() => loadProject(item.id)}>
+                  {loadingProjectId === item.id ? "打开中" : "打开"}
                 </button>
               </article>
             ))}
@@ -634,6 +770,31 @@ export function Studio({ templates }: StudioProps) {
             <Metric label="版本数" value={stats.versionCount} />
             <Metric label="分享数" value={stats.shareCount} />
             <Metric label="Remix" value={stats.remixCount} />
+            <div className="account-profile">
+              <div className="account-avatar" style={{ background: currentUser?.avatarColor ?? "#1f6b4a" }}>
+                {(currentUser?.name ?? "C").slice(0, 1)}
+              </div>
+              <div>
+                <p className="eyebrow">当前创作者</p>
+                <h2>{currentUser?.name ?? "Creator Demo"}</h2>
+                <div className="account-actions">
+                  <Link href={`/users/${currentUser?.id ?? "user_demo"}`}>查看公开主页</Link>
+                  {authenticated ? (
+                    <form action="/api/auth/logout" method="post">
+                      <button type="submit">
+                        <LogOut size={15} />
+                        退出登录
+                      </button>
+                    </form>
+                  ) : (
+                    <Link href="/api/auth/github/start?returnTo=/">
+                      <Github size={15} />
+                      使用 GitHub 登录
+                    </Link>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="account-note">
               <BookOpen size={18} />
               <span>本地 adapter 正在使用 `/data` 保存项目、版本、分享链接和 HTML artifact。</span>
@@ -699,6 +860,8 @@ function GenerationProcessPanel({
   onRollback: (versionId: string) => void;
 }) {
   const latestVersions = versions.slice(0, 5);
+  const runStatus = lastRun?.status;
+  const statusDetail = runStatus ? statusLabel(runStatus) : status;
 
   return (
     <aside className="generation-process" aria-label="生成过程">
@@ -708,9 +871,24 @@ function GenerationProcessPanel({
       </div>
       <ol className="process-list">
         <ProcessStep done active={false} title="接收指令" detail="读取 prompt、模式和素材" />
-        <ProcessStep done={Boolean(currentVersion || lastRun)} active={busy} title="生成小游戏" detail={busy ? "模型正在生成 HTML" : status} />
-        <ProcessStep done={Boolean(currentVersion?.validationReport.valid)} active={false} title="安全校验" detail={currentVersion?.validationReport.valid ? "HTML 校验通过" : "等待新版本"} />
-        <ProcessStep done={Boolean(currentVersion)} active={false} title="写入版本" detail={currentVersion ? currentVersion.id : "生成后创建不可变版本"} />
+        <ProcessStep
+          done={Boolean(currentVersion) || hasReachedRunStage(runStatus, "validating")}
+          active={Boolean(runStatus && ["queued", "running", "planning", "generating"].includes(runStatus))}
+          title="生成小游戏"
+          detail={statusDetail}
+        />
+        <ProcessStep
+          done={Boolean(currentVersion?.validationReport.valid) || hasReachedRunStage(runStatus, "persisting")}
+          active={Boolean(runStatus && ["validating", "repairing", "smoking", "moderating"].includes(runStatus))}
+          title="安全校验"
+          detail={currentVersion?.validationReport.valid ? "HTML 校验通过" : statusDetail}
+        />
+        <ProcessStep
+          done={Boolean(currentVersion)}
+          active={runStatus === "persisting"}
+          title="写入版本"
+          detail={currentVersion ? currentVersion.id : statusDetail}
+        />
         <ProcessStep done={Boolean(currentVersion)} active={false} title="预览就绪" detail={currentVersion ? "手机预览已更新" : "等待预览"} />
       </ol>
       {lastRun && (
@@ -772,4 +950,56 @@ function modeLabel(mode: GenerationMode) {
     import: "导入"
   };
   return labels[mode];
+}
+
+function statusLabel(status: GenerationRun["status"]) {
+  const labels: Record<GenerationRun["status"], string> = {
+    queued: "任务已排队",
+    running: "任务运行中",
+    planning: "正在规划玩法",
+    generating: "模型正在生成 HTML",
+    validating: "正在校验 HTML",
+    repairing: "正在尝试修复",
+    smoking: "正在浏览器冒烟测试",
+    moderating: "正在进行发布前检查",
+    persisting: "正在写入版本",
+    success: "生成完成",
+    failed: "生成失败"
+  };
+  return labels[status];
+}
+
+function hasReachedRunStage(status: GenerationRun["status"] | undefined, stage: GenerationRun["status"]) {
+  if (!status) return false;
+  if (status === "failed") return false;
+  const order: GenerationRun["status"][] = [
+    "queued",
+    "running",
+    "planning",
+    "generating",
+    "validating",
+    "repairing",
+    "smoking",
+    "moderating",
+    "persisting",
+    "success",
+    "failed"
+  ];
+  return order.indexOf(status) >= order.indexOf(stage);
+}
+
+function readStoredActiveRunId() {
+  return window.localStorage.getItem(activeRunStorageKey);
+}
+
+function writeStoredActiveRunId(runId: string) {
+  window.localStorage.setItem(activeRunStorageKey, runId);
+}
+
+function clearStoredActiveRunId() {
+  window.localStorage.removeItem(activeRunStorageKey);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

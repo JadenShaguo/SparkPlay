@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectVisibility {
+  private
+  unlisted
+  public
+}
+
+enum SafetyStatus {
+  pending
+  approved
+  blocked
+}
+
+enum GenerationRunStatus {
+  queued
+  running
+  planning
+  generating
+  validating
+  repairing
+  smoking
+  moderating
+  persisting
+  success
+  failed
+}
+
+enum SessionRole {
+  user
+  assistant
+}
+
+enum ShareVisibility {
+  public
+  unlisted
+}
+
+enum AnalyticsEventType {
+  shareOpen
+  playStart
+  playComplete
+  remixClick
+}
+
+model User {
+  id          String   @id
+  name        String
+  avatarColor String
+  createdAt   DateTime @default(now())
+
+  @@map("users")
+}
+
+model Project {
+  id               String            @id
+  ownerId          String
+  title            String
+  description      String            @db.Text
+  visibility       ProjectVisibility @default(private)
+  currentVersionId String
+  rootVersionId    String
+  savedAt          DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  remixOf          Json?
+
+  @@index([ownerId])
+  @@index([visibility, updatedAt])
+  @@map("projects")
+}
+
+model PlayableVersion {
+  id                String            @id
+  projectId         String
+  parentVersionIds  String[]
+  sourceKind        String
+  createdBy         String
+  prompt            String            @db.Text
+  changeSummary     String            @db.Text
+  manifest          Json
+  validationReport  Json
+  artifactPath      String
+  artifactKey       String?
+  thumbnailKey      String?
+  smokeReport       Json?
+  htmlBytes         Int
+  generationRunId   String?
+  createdAt         DateTime          @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([generationRunId])
+  @@map("playable_versions")
+}
+
+model Asset {
+  id        String   @id
+  projectId String?
+  versionId String?
+  kind      String
+  name      String
+  mimeType  String
+  dataUrl   String?  @db.Text
+  objectKey String?
+  bytes     Int
+  checksum  String?
+  createdAt DateTime @default(now())
+
+  @@index([projectId])
+  @@index([versionId])
+  @@map("assets")
+}
+
+model GenerationRun {
+  id                 String              @id
+  projectId          String
+  mode               String
+  prompt             String              @db.Text
+  status             GenerationRunStatus
+  startedAt          DateTime            @default(now())
+  completedAt        DateTime?
+  durationMs         Int?
+  firstPreviewMs     Int?
+  tokenUsage         Json
+  htmlBytes          Int?
+  validationFailures Int
+  repairCount        Int
+  model              String
+  error              String?             @db.Text
+
+  @@index([projectId])
+  @@index([status, startedAt])
+  @@map("generation_runs")
+}
+
+model SessionMessage {
+  id        String      @id
+  projectId String
+  role      SessionRole
+  content   String      @db.Text
+  versionId String?
+  createdAt DateTime    @default(now())
+
+  @@index([projectId, createdAt])
+  @@map("session_messages")
+}
+
+model ShareLink {
+  id            String          @id
+  slug          String          @unique
+  projectId     String
+  versionId     String
+  visibility    ShareVisibility @default(unlisted)
+  createdAt     DateTime        @default(now())
+  opens         Int             @default(0)
+  playStarts    Int             @default(0)
+  playCompletes Int             @default(0)
+  remixClicks   Int             @default(0)
+
+  @@index([projectId, versionId])
+  @@map("share_links")
+}
+
+model RemixLineage {
+  id            String   @id
+  fromProjectId String
+  fromVersionId String
+  toProjectId   String
+  toVersionId   String
+  createdAt     DateTime @default(now())
+
+  @@unique([fromProjectId, fromVersionId, toProjectId, toVersionId])
+  @@index([fromProjectId])
+  @@index([toProjectId])
+  @@map("remix_lineages")
+}
+
+model Template {
+  id              String   @id
+  title           String
+  category        String
+  prompt          String   @db.Text
+  tags            String[]
+  recommendedMode String
+
+  @@map("templates")
+}
+
+model ModerationReview {
+  id        String       @id
+  projectId String
+  versionId String
+  status    SafetyStatus
+  reasons   String[]
+  createdAt DateTime     @default(now())
+
+  @@index([projectId])
+  @@index([versionId])
+  @@map("moderation_reviews")
+}
+
+model AnalyticsEvent {
+  id        String             @id
+  type      AnalyticsEventType
+  shareSlug String?
+  projectId String?
+  versionId String?
+  createdAt DateTime           @default(now())
+
+  @@index([shareSlug, createdAt])
+  @@index([projectId, createdAt])
+  @@map("analytics_events")
+}
