@@ -238,7 +238,15 @@ export interface ModerationReview {
   versionId: string;
   status: SafetyStatus;
   reasons: string[];
+  reporterId?: string;
+  kind?: "precheck" | "user_report" | "takedown";
   createdAt: string;
+}
+
+export interface PublicProjectQuery {
+  sort?: "latest" | "remixed" | "played";
+  query?: string;
+  category?: string;
 }
 
 export interface DatabaseShape {

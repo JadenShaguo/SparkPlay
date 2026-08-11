@@ -1,13 +1,15 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { User } from "@/types/domain";
-import { ensureUser } from "@/lib/store";
+import { ensureUser, migrateUserContent } from "@/lib/store";
 
 export const defaultUserId = "user_demo";
 export const sessionCookieName = "sparkplay_session";
+export const guestCookieName = "sparkplay_guest_id";
 const oauthStateCookieName = "sparkplay_oauth_state";
 const oauthReturnCookieName = "sparkplay_oauth_return";
 const sessionMaxAgeSeconds = 60 * 60 * 24 * 30;
 const oauthStateMaxAgeSeconds = 60 * 10;
+const guestMaxAgeSeconds = 60 * 60 * 24 * 90;
 
 export async function getCurrentUser(request?: Request): Promise<User> {
   const session = readSignedSession(request);
@@ -19,7 +21,10 @@ export async function getCurrentUser(request?: Request): Promise<User> {
     });
   }
 
-  const userId = readHeaderOrCookie(request, "x-sparkplay-user-id", "sparkplay_user_id") ?? defaultUserId;
+  const userId =
+    readHeaderOrCookie(request, "x-sparkplay-user-id", guestCookieName) ??
+    readHeaderOrCookie(request, "x-sparkplay-user-id", "sparkplay_user_id") ??
+    defaultUserId;
   const userName = readHeaderOrCookie(request, "x-sparkplay-user-name", "sparkplay_user_name") ?? defaultNameForUser(userId);
   const avatarColor = readHeaderOrCookie(request, "x-sparkplay-avatar-color", "sparkplay_avatar_color") ?? colorForUser(userId);
 
@@ -32,6 +37,52 @@ export async function getCurrentUser(request?: Request): Promise<User> {
 
 export function isAuthenticated(request?: Request): boolean {
   return Boolean(readSignedSession(request));
+}
+
+export function isGuestUserId(userId: string): boolean {
+  return userId.startsWith("guest_");
+}
+
+export async function getOrCreateCurrentUser(request?: Request): Promise<{
+  user: User;
+  authenticated: boolean;
+  guest: boolean;
+  setCookie?: string;
+}> {
+  if (isAuthenticated(request)) {
+    return {
+      user: await getCurrentUser(request),
+      authenticated: true,
+      guest: false
+    };
+  }
+
+  const existingGuestId = readCookie(request, guestCookieName);
+  if (existingGuestId) {
+    const user = await getCurrentUser(request);
+    return {
+      user,
+      authenticated: false,
+      guest: isGuestUserId(user.id)
+    };
+  }
+
+  const id = `guest_${randomBytes(9).toString("base64url")}`;
+  const user = await ensureUser({
+    id,
+    name: defaultNameForUser(id),
+    avatarColor: colorForUser(id)
+  });
+  return {
+    user,
+    authenticated: false,
+    guest: true,
+    setCookie: serializeCookie(guestCookieName, id, {
+      maxAge: guestMaxAgeSeconds,
+      httpOnly: true,
+      sameSite: "Lax"
+    })
+  };
 }
 
 export function buildGitHubAuthorizeUrl(request: Request): {
@@ -70,6 +121,7 @@ export async function completeGitHubOAuth(request: Request): Promise<{
   sessionCookie: string;
   clearStateCookie: string;
   clearReturnCookie: string;
+  clearGuestCookie: string;
 }> {
   const config = getGitHubOAuthConfig(request);
   const requestUrl = new URL(request.url);
@@ -108,6 +160,10 @@ export async function completeGitHubOAuth(request: Request): Promise<{
     name: githubUser.name || githubUser.login,
     avatarColor: colorForUser(`github_${githubUser.id}`)
   });
+  const guestId = readCookie(request, guestCookieName);
+  if (guestId && isGuestUserId(guestId) && guestId !== user.id) {
+    await migrateUserContent(guestId, user.id);
+  }
   const returnTo = sanitizeReturnTo(readCookie(request, oauthReturnCookieName) ?? "/");
 
   return {
@@ -115,7 +171,8 @@ export async function completeGitHubOAuth(request: Request): Promise<{
     returnTo,
     sessionCookie: createSessionCookie(user),
     clearStateCookie: clearCookie(oauthStateCookieName),
-    clearReturnCookie: clearCookie(oauthReturnCookieName)
+    clearReturnCookie: clearCookie(oauthReturnCookieName),
+    clearGuestCookie: clearCookie(guestCookieName)
   };
 }
 
@@ -183,6 +240,7 @@ function normalizeUserId(value: string): string {
 
 function defaultNameForUser(userId: string): string {
   if (userId === defaultUserId) return "SparkPlay Studio";
+  if (isGuestUserId(userId)) return `游客 ${normalizeUserId(userId).slice(-6)}`;
   return `Creator ${normalizeUserId(userId).slice(-6)}`;
 }
 

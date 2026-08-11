@@ -199,10 +199,13 @@ model ModerationReview {
   versionId String
   status    SafetyStatus
   reasons   String[]
+  reporterId String?
+  kind      String?
   createdAt DateTime     @default(now())
 
   @@index([projectId])
   @@index([versionId])
+  @@index([reporterId])
   @@map("moderation_reviews")
 }
 

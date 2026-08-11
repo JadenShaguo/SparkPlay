@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getOrCreateCurrentUser } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
 import { importHtml, readArtifact } from "@/lib/store";
 import { validateHtml } from "@/lib/validation";
@@ -15,17 +15,19 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const user = await getCurrentUser(request);
+    const session = await getOrCreateCurrentUser(request);
     const validationReport = validateHtml(body.html);
     const result = await importHtml({
       projectId: body.projectId,
-      ownerId: user.id,
+      ownerId: session.user.id,
       title: body.title,
       html: body.html,
       validationReport
     });
     const html = await readArtifact(result.version);
-    return jsonOk({ ...result, html });
+    const response = jsonOk({ ...result, html });
+    if (session.setCookie) response.headers.append("Set-Cookie", session.setCookie);
+    return response;
   } catch (error) {
     return jsonError(error);
   }

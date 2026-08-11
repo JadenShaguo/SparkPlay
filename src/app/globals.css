@@ -1035,6 +1035,48 @@ h2 {
   background: rgba(12, 14, 20, 0.92);
 }
 
+.account-state {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-profile-editor {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px auto;
+  gap: 12px;
+  align-items: end;
+  background: rgba(12, 14, 20, 0.92);
+}
+
+.account-profile-editor label {
+  display: grid;
+  gap: 7px;
+}
+
+.account-profile-editor label span {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.account-profile-editor input {
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #05080a;
+}
+
+.account-profile-editor input[type="color"] {
+  padding: 4px;
+}
+
 .account-avatar {
   width: 48px;
   height: 48px;
@@ -1255,6 +1297,17 @@ h2 {
   font-size: 13px;
 }
 
+.play-notice {
+  margin: 0 0 10px;
+  border: 1px solid rgba(139, 141, 255, 0.32);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #dfe2ff;
+  background: rgba(139, 141, 255, 0.1);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .play-meta span {
   display: inline-flex;
   gap: 5px;
@@ -1330,6 +1383,40 @@ h2 {
   max-width: 680px;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.discover-filters {
+  margin: -8px 0 18px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 190px auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.discover-filters input,
+.discover-filters select,
+.discover-filters button,
+.discover-filters a {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--soft);
+  background: #0f131c;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.discover-filters input,
+.discover-filters select {
+  color: var(--ink);
+  outline: none;
+}
+
+.discover-filters button {
+  color: #08120f;
+  background: linear-gradient(180deg, #55ebb0, #28b97d);
 }
 
 .public-tabs {
@@ -1660,6 +1747,11 @@ h2 {
   }
 
   .profile-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .discover-filters,
+  .account-profile-editor {
     grid-template-columns: 1fr;
   }
 

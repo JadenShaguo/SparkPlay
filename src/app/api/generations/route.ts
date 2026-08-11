@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getOrCreateCurrentUser } from "@/lib/auth";
 import { enqueueGeneration } from "@/lib/generation-queue";
 import { jsonError, jsonOk } from "@/lib/http";
 
@@ -24,13 +24,15 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const user = await getCurrentUser(request);
-    const run = await enqueueGeneration({ ...body, ownerId: user.id });
-    return jsonOk({
+    const session = await getOrCreateCurrentUser(request);
+    const run = await enqueueGeneration({ ...body, ownerId: session.user.id });
+    const response = jsonOk({
       runId: run.id,
       status: run.status,
       run
     });
+    if (session.setCookie) response.headers.append("Set-Cookie", session.setCookie);
+    return response;
   } catch (error) {
     return jsonError(error);
   }

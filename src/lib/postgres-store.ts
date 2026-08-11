@@ -3,9 +3,11 @@ import type {
   AnalyticsEventType,
   GenerationRun,
   GenerationRunStatus,
+  ModerationReview,
   PlayableManifest,
   PlayableVersion,
   Project,
+  PublicProjectQuery,
   PublicProjectCard,
   RemixLineage,
   SmokeReport,
@@ -122,6 +124,39 @@ export async function listPublicProjectCards(sort: "latest" | "remixed" | "playe
   return sortProjectCards(cards, sort);
 }
 
+export async function listPublicProjectCardsWithQuery(query: PublicProjectQuery = {}): Promise<PublicProjectCard[]> {
+  const prisma = getPrismaClient();
+  const projects = await prisma.project.findMany({
+    where: { visibility: "public" },
+    orderBy: { updatedAt: "desc" }
+  });
+  const normalizedQuery = query.query?.trim().toLowerCase();
+  const normalizedCategory = query.category?.trim().toLowerCase();
+  const cards = await Promise.all(projects.map((project) => buildPublicProjectCard(mapProject(project))));
+  const filtered = cards.filter((card) => {
+    if (normalizedCategory && normalizedCategory !== "all") {
+      if (card.currentVersion?.manifest.category.toLowerCase() !== normalizedCategory) return false;
+    }
+    if (!normalizedQuery) return true;
+    const haystack = [
+      card.project.title,
+      card.project.description,
+      card.currentVersion?.manifest.title,
+      card.currentVersion?.manifest.description,
+      card.currentVersion?.manifest.category,
+      ...(card.currentVersion?.manifest.tags ?? [])
+    ].join(" ").toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+  return sortProjectCards(filtered, query.sort ?? "latest");
+}
+
+export async function listPublicCategories(): Promise<string[]> {
+  const cards = await listPublicProjectCards("latest");
+  return [...new Set(cards.map((card) => card.currentVersion?.manifest.category).filter((category): category is string => Boolean(category)))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
   const user = await getUser(userId);
   if (!user) return null;
@@ -157,6 +192,31 @@ export async function setProjectVisibility(projectId: string, visibility: Projec
     }
   });
   return mapProject(project);
+}
+
+export async function migrateUserContent(fromOwnerId: string, toOwnerId: string): Promise<number> {
+  if (fromOwnerId === toOwnerId) return 0;
+  const prisma = getPrismaClient();
+  const result = await prisma.project.updateMany({
+    where: { ownerId: fromOwnerId },
+    data: {
+      ownerId: toOwnerId,
+      updatedAt: new Date()
+    }
+  });
+  return result.count;
+}
+
+export async function updateUserProfile(userId: string, input: Partial<Pick<User, "name" | "avatarColor">>): Promise<User> {
+  const prisma = getPrismaClient();
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      ...(input.name?.trim() ? { name: input.name.trim().slice(0, 40) } : {}),
+      ...(input.avatarColor?.trim() ? { avatarColor: input.avatarColor.trim() } : {})
+    }
+  });
+  return mapUser(user);
 }
 
 export async function getProjectVersions(projectId: string): Promise<PlayableVersion[]> {
@@ -658,6 +718,32 @@ export async function recordShareEvent(slug: string, type: AnalyticsEventType): 
   ]);
 }
 
+export async function reportProject(input: {
+  projectId: string;
+  versionId: string;
+  reporterId: string;
+  reason: string;
+}): Promise<ModerationReview> {
+  const prisma = getPrismaClient();
+  const project = await prisma.project.findUnique({ where: { id: input.projectId } });
+  const version = await prisma.playableVersion.findFirst({ where: { id: input.versionId, projectId: input.projectId } });
+  if (!project || !version) throw new Error("Project or version not found");
+  if (project.visibility === "private") throw new Error("Private project cannot be reported");
+  const review = await prisma.moderationReview.create({
+    data: {
+      id: createId("mod"),
+      projectId: input.projectId,
+      versionId: input.versionId,
+      status: "pending",
+      reasons: [input.reason.trim().slice(0, 240) || "用户举报"],
+      reporterId: input.reporterId,
+      kind: "user_report",
+      createdAt: new Date()
+    }
+  });
+  return mapModerationReview(review);
+}
+
 export async function forkShare(slug: string, ownerId = demoUserId): Promise<Project> {
   const share = await getShareBySlug(slug);
   if (!share) throw new Error("Share link not found");
@@ -754,8 +840,8 @@ async function ensureDemoUser() {
     update: {},
     create: {
       id: demoUserId,
-      name: "Creator Demo",
-      avatarColor: "#1f6b4a",
+      name: "SparkPlay Studio",
+      avatarColor: "#7f7cff",
       createdAt: new Date(0)
     }
   });
@@ -798,8 +884,8 @@ async function buildPublicProjectCard(project: Project): Promise<PublicProjectCa
     currentVersion: version ? mapVersion(version) : null,
     author: author ? mapUser(author) : {
       id: demoUserId,
-      name: "Creator Demo",
-      avatarColor: "#1f6b4a",
+      name: "SparkPlay Studio",
+      avatarColor: "#7f7cff",
       createdAt: new Date(0).toISOString()
     },
     shareSlug: shares.find((share) => share.versionId === project.currentVersionId)?.slug ?? shares[0]?.slug,
@@ -974,6 +1060,28 @@ function mapLineage(lineage: {
     toProjectId: lineage.toProjectId,
     toVersionId: lineage.toVersionId,
     createdAt: lineage.createdAt.toISOString()
+  };
+}
+
+function mapModerationReview(review: {
+  id: string;
+  projectId: string;
+  versionId: string;
+  status: string;
+  reasons: string[];
+  reporterId: string | null;
+  kind: string | null;
+  createdAt: Date;
+}): ModerationReview {
+  return {
+    id: review.id,
+    projectId: review.projectId,
+    versionId: review.versionId,
+    status: review.status as ModerationReview["status"],
+    reasons: review.reasons,
+    reporterId: review.reporterId ?? undefined,
+    kind: review.kind as ModerationReview["kind"],
+    createdAt: review.createdAt.toISOString()
   };
 }
 

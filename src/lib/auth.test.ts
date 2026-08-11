@@ -73,4 +73,23 @@ describe("auth", () => {
       name: "SparkPlay Studio"
     });
   });
+
+  it("creates a guest user session for anonymous visitors", async () => {
+    await useTempStore();
+    vi.resetModules();
+    const auth = await import("@/lib/auth");
+    const session = await auth.getOrCreateCurrentUser(new Request("http://localhost/api/me"));
+
+    expect(session.authenticated).toBe(false);
+    expect(session.guest).toBe(true);
+    expect(session.user.id).toMatch(/^guest_/);
+    expect(session.setCookie).toContain("sparkplay_guest_id=");
+
+    const request = new Request("http://localhost/api/me", {
+      headers: { cookie: session.setCookie ?? "" }
+    });
+    const resumed = await auth.getOrCreateCurrentUser(request);
+    expect(resumed.user.id).toBe(session.user.id);
+    expect(resumed.setCookie).toBeUndefined();
+  });
 });

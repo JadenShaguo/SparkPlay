@@ -5,10 +5,12 @@ import type {
   DatabaseShape,
   GenerationRun,
   GenerationRunStatus,
+  ModerationReview,
   RemixLineage,
   PlayableManifest,
   PlayableVersion,
   Project,
+  PublicProjectQuery,
   PublicProjectCard,
   SmokeReport,
   ShareLink,
@@ -150,7 +152,8 @@ export async function listPublicProjects(): Promise<Project[]> {
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-export async function listPublicProjectCards(sort: "latest" | "remixed" | "played" = "latest"): Promise<PublicProjectCard[]> {
+export async function listPublicProjectCards(sort: "latest" | "remixed" | "played" | PublicProjectQuery = "latest"): Promise<PublicProjectCard[]> {
+  if (typeof sort === "object") return listPublicProjectCardsWithQuery(sort);
   if (usesPostgresDataAdapter()) return postgresStore.listPublicProjectCards(sort);
   const db = await getDb();
   const cards = await Promise.all(
@@ -159,6 +162,46 @@ export async function listPublicProjectCards(sort: "latest" | "remixed" | "playe
       .map((project) => buildPublicProjectCard(db, project))
   );
   return sortProjectCards(cards, sort);
+}
+
+export async function listPublicProjectCardsWithQuery(query: PublicProjectQuery = {}): Promise<PublicProjectCard[]> {
+  if (usesPostgresDataAdapter()) return postgresStore.listPublicProjectCardsWithQuery(query);
+  const db = await getDb();
+  const normalizedQuery = query.query?.trim().toLowerCase();
+  const normalizedCategory = query.category?.trim().toLowerCase();
+  const cards = await Promise.all(
+    db.projects
+      .filter((project) => project.visibility === "public")
+      .filter((project) => {
+        const version = db.versions.find((item) => item.projectId === project.id && item.id === project.currentVersionId);
+        if (normalizedCategory && normalizedCategory !== "all") {
+          if (version?.manifest.category.toLowerCase() !== normalizedCategory) return false;
+        }
+        if (!normalizedQuery) return true;
+        const haystack = [
+          project.title,
+          project.description,
+          version?.manifest.title,
+          version?.manifest.description,
+          version?.manifest.category,
+          ...(version?.manifest.tags ?? [])
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+      })
+      .map((project) => buildPublicProjectCard(db, project))
+  );
+  return sortProjectCards(cards, query.sort ?? "latest");
+}
+
+export async function listPublicCategories(): Promise<string[]> {
+  if (usesPostgresDataAdapter()) return postgresStore.listPublicCategories();
+  const db = await getDb();
+  return [...new Set(
+    db.projects
+      .filter((project) => project.visibility === "public")
+      .map((project) => db.versions.find((version) => version.projectId === project.id && version.id === project.currentVersionId)?.manifest.category)
+      .filter((category): category is string => Boolean(category))
+  )].sort((a, b) => a.localeCompare(b));
 }
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
@@ -206,6 +249,33 @@ export async function setProjectVisibility(
   project.updatedAt = new Date().toISOString();
   await writeDb(db);
   return project;
+}
+
+export async function migrateUserContent(fromOwnerId: string, toOwnerId: string): Promise<number> {
+  if (fromOwnerId === toOwnerId) return 0;
+  if (usesPostgresDataAdapter()) return postgresStore.migrateUserContent(fromOwnerId, toOwnerId);
+  const db = await getDb();
+  let migrated = 0;
+  for (const project of db.projects) {
+    if (project.ownerId === fromOwnerId) {
+      project.ownerId = toOwnerId;
+      project.updatedAt = new Date().toISOString();
+      migrated += 1;
+    }
+  }
+  await writeDb(db);
+  return migrated;
+}
+
+export async function updateUserProfile(userId: string, input: Partial<Pick<User, "name" | "avatarColor">>): Promise<User> {
+  if (usesPostgresDataAdapter()) return postgresStore.updateUserProfile(userId, input);
+  const db = await getDb();
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) throw new Error("User not found");
+  if (input.name?.trim()) user.name = input.name.trim().slice(0, 40);
+  if (input.avatarColor?.trim()) user.avatarColor = input.avatarColor.trim();
+  await writeDb(db);
+  return user;
 }
 
 export async function getProjectVersions(projectId: string): Promise<PlayableVersion[]> {
@@ -623,6 +693,33 @@ export async function recordShareEvent(slug: string, type: AnalyticsEventType): 
     createdAt: new Date().toISOString()
   });
   await writeDb(db);
+}
+
+export async function reportProject(input: {
+  projectId: string;
+  versionId: string;
+  reporterId: string;
+  reason: string;
+}): Promise<ModerationReview> {
+  if (usesPostgresDataAdapter()) return postgresStore.reportProject(input);
+  const db = await getDb();
+  const project = db.projects.find((item) => item.id === input.projectId);
+  const version = db.versions.find((item) => item.projectId === input.projectId && item.id === input.versionId);
+  if (!project || !version) throw new Error("Project or version not found");
+  if (project.visibility === "private") throw new Error("Private project cannot be reported");
+  const review: ModerationReview = {
+    id: createId("mod"),
+    projectId: input.projectId,
+    versionId: input.versionId,
+    status: "pending",
+    reasons: [input.reason.trim().slice(0, 240) || "用户举报"],
+    reporterId: input.reporterId,
+    kind: "user_report",
+    createdAt: new Date().toISOString()
+  };
+  db.moderationReviews.push(review);
+  await writeDb(db);
+  return review;
 }
 
 export async function forkShare(slug: string, ownerId = demoUserId): Promise<Project> {

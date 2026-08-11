@@ -1,13 +1,13 @@
 import { jsonError, jsonOk } from "@/lib/http";
-import { getCurrentUser } from "@/lib/auth";
+import { getOrCreateCurrentUser } from "@/lib/auth";
 import { getDashboardStats, getVersion, listProjects } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const user = await getCurrentUser(request);
-    const [projects, stats] = await Promise.all([listProjects(user.id), getDashboardStats(user.id)]);
+    const session = await getOrCreateCurrentUser(request);
+    const [projects, stats] = await Promise.all([listProjects(session.user.id), getDashboardStats(session.user.id)]);
     const projectCards = await Promise.all(
       projects.map(async (project) => {
         const currentVersion = await getVersion(project.id, project.currentVersionId);
@@ -19,7 +19,9 @@ export async function GET(request: Request) {
         };
       })
     );
-    return jsonOk({ projects: projectCards, stats });
+    const response = jsonOk({ projects: projectCards, stats });
+    if (session.setCookie) response.headers.append("Set-Cookie", session.setCookie);
+    return response;
   } catch (error) {
     return jsonError(error);
   }

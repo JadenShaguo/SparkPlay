@@ -80,6 +80,7 @@ interface GenerationResultResponse {
 interface MeResponse {
   user: User;
   authenticated: boolean;
+  guest: boolean;
 }
 
 interface LocalGitHubConfigResponse {
@@ -124,6 +125,8 @@ export function Studio({ templates }: StudioProps) {
   const [activeGameTabId, setActiveGameTabId] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [authenticated, setAuthenticated] = useState(false);
+  const [guest, setGuest] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ name: "", avatarColor: "#7f7cff" });
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [libraryError, setLibraryError] = useState("");
   const [githubConfigOpen, setGithubConfigOpen] = useState(false);
@@ -243,9 +246,11 @@ export function Studio({ templates }: StudioProps) {
         .then((data) => {
           setCurrentUser(data.user);
           setAuthenticated(data.authenticated);
+          setGuest(data.guest);
+          setProfileDraft({ name: data.user.name, avatarColor: data.user.avatarColor });
+          return refreshProjects();
         })
         .catch(() => undefined);
-      void refreshProjects();
       const params = new URLSearchParams(window.location.search);
       const projectId = params.get("project");
       if (projectId) {
@@ -569,6 +574,26 @@ export function Studio({ templates }: StudioProps) {
     }
   }
 
+  async function saveProfile() {
+    setStatus("正在保存资料");
+    try {
+      const response = await fetch("/api/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profileDraft)
+      });
+      const data = (await response.json()) as MeResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "保存资料失败");
+      setCurrentUser(data.user);
+      setAuthenticated(data.authenticated);
+      setGuest(data.guest);
+      setProfileDraft({ name: data.user.name, avatarColor: data.user.avatarColor });
+      setStatus("资料已保存");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "保存资料失败");
+    }
+  }
+
   function startResize(event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
     const startX = event.clientX;
@@ -853,6 +878,7 @@ export function Studio({ templates }: StudioProps) {
               <div>
                 <p className="eyebrow">当前创作者</p>
                 <h2>{currentUser?.name ?? "Creator Demo"}</h2>
+                <p className="account-state">{authenticated ? "GitHub 已登录" : guest ? "游客模式，作品保存在本机游客账户" : "本地演示账户"}</p>
                 <div className="account-actions">
                   <Link href={`/users/${currentUser?.id ?? "user_demo"}`}>查看公开主页</Link>
                   {authenticated ? (
@@ -870,6 +896,27 @@ export function Studio({ templates }: StudioProps) {
                   )}
                 </div>
               </div>
+            </div>
+            <div className="account-profile-editor">
+              <label>
+                <span>显示名称</span>
+                <input
+                  value={profileDraft.name}
+                  onChange={(event) => setProfileDraft((prev) => ({ ...prev, name: event.target.value }))}
+                  maxLength={40}
+                />
+              </label>
+              <label>
+                <span>头像颜色</span>
+                <input
+                  value={profileDraft.avatarColor}
+                  onChange={(event) => setProfileDraft((prev) => ({ ...prev, avatarColor: event.target.value }))}
+                  type="color"
+                />
+              </label>
+              <button className="plain-action" type="button" onClick={saveProfile}>
+                保存资料
+              </button>
             </div>
             <div className="account-note">
               <BookOpen size={18} />

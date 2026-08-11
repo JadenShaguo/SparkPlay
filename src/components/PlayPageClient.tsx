@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, GitFork } from "lucide-react";
+import { Copy, Flag, GitFork } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -32,6 +32,8 @@ export function PlayPageClient({
   authenticated
 }: PlayPageClientProps) {
   const [copied, setCopied] = useState(false);
+  const [reportMessage, setReportMessage] = useState("");
+  const [reporting, setReporting] = useState(false);
   const startedRef = useRef(false);
   const completedRef = useRef(false);
 
@@ -76,6 +78,27 @@ export function PlayPageClient({
     window.setTimeout(() => setCopied(false), 1600);
   }
 
+  async function reportPlayable() {
+    const reason = window.prompt("请简单说明举报原因，例如：不适宜内容、侵权、欺诈或其他风险");
+    if (!reason?.trim()) return;
+    setReporting(true);
+    setReportMessage("");
+    try {
+      const response = await fetch(`/api/share-links/${slug}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "举报失败");
+      setReportMessage("已收到举报，我们会在审核后处理。");
+    } catch (error) {
+      setReportMessage(error instanceof Error ? error.message : "举报失败");
+    } finally {
+      setReporting(false);
+    }
+  }
+
   return (
     <>
       <div className="play-toolbar">
@@ -107,15 +130,20 @@ export function PlayPageClient({
           <form action={`/api/share-links/${slug}/remix`} method="post">
             <button className="icon-button with-label" type="submit">
               <GitFork size={18} />
-              {authenticated ? "Remix" : "登录并 Remix"}
+              {authenticated ? "Remix" : "游客 Remix"}
             </button>
           </form>
           <button className="icon-button with-label" type="button" onClick={copyCurrentUrl}>
             <Copy size={18} />
             {copied ? "已复制" : "分享"}
           </button>
+          <button className="icon-button with-label" type="button" disabled={reporting} onClick={reportPlayable}>
+            <Flag size={18} />
+            举报
+          </button>
         </div>
       </div>
+      {reportMessage && <div className="play-notice">{reportMessage}</div>}
       <div className="play-frame-wrap" onPointerDownCapture={recordPlayStart} onFocusCapture={recordPlayStart}>
         <iframe title={title} srcDoc={html} sandbox="allow-scripts" referrerPolicy="no-referrer" />
       </div>

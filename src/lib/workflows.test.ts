@@ -123,10 +123,27 @@ describe("SparkPlay workflows", () => {
     const demoProfile = await modules.store.getUserProfile("user_demo");
     expect(demoProfile?.stats.publicProjectCount).toBe(1);
     expect(demoProfile?.publicProjects[0].project.id).toBe(remixed.project.id);
+    expect(await modules.store.listPublicCategories()).toContain(remixed.version.manifest.category);
+    expect(await modules.store.listPublicProjectCardsWithQuery({ query: "星空" })).toHaveLength(1);
+    expect(await modules.store.listPublicProjectCardsWithQuery({ category: remixed.version.manifest.category })).toHaveLength(1);
 
     const forkLineage = await modules.store.getProjectLineage(forkedProject.id);
     expect(forkLineage.ancestors).toHaveLength(1);
     expect(forkLineage.ancestors[0].fromVersionId).toBe(remixed.version.id);
+
+    const report = await modules.store.reportProject({
+      projectId: remixed.project.id,
+      versionId: remixed.version.id,
+      reporterId: "user_guest",
+      reason: "测试举报"
+    });
+    expect(report.kind).toBe("user_report");
+    expect(report.reporterId).toBe("user_guest");
+
+    const migratedCount = await modules.store.migrateUserContent("user_guest", "user_demo");
+    expect(migratedCount).toBe(1);
+    expect(await modules.store.listProjects("user_guest")).toHaveLength(0);
+    expect(await modules.store.listProjects("user_demo")).toHaveLength(2);
 
     await modules.store.setProjectVisibility(remixed.project.id, "private");
     expect(await modules.store.listPublicProjects()).toHaveLength(0);

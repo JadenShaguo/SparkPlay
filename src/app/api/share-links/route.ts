@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getOrCreateCurrentUser } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
 import { createShareLink, getProject } from "@/lib/store";
 
@@ -13,11 +13,13 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const user = await getCurrentUser(request);
+    const session = await getOrCreateCurrentUser(request);
     const project = await getProject(body.projectId);
-    if (!project || project.ownerId !== user.id) return jsonError(new Error("Project not found"), 404);
+    if (!project || project.ownerId !== session.user.id) return jsonError(new Error("Project not found"), 404);
     const share = await createShareLink(body.projectId, body.versionId);
-    return jsonOk({ share, url: `/play/${share.slug}` });
+    const response = jsonOk({ share, url: `/play/${share.slug}` });
+    if (session.setCookie) response.headers.append("Set-Cookie", session.setCookie);
+    return response;
   } catch (error) {
     return jsonError(error);
   }

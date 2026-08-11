@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getCurrentUser } from "@/lib/auth";
+import { getOrCreateCurrentUser } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
 import { getProject, rollbackVersion, readArtifact } from "@/lib/store";
 
@@ -13,12 +13,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   try {
     const body = requestSchema.parse(await request.json());
     const { projectId } = await params;
-    const user = await getCurrentUser(request);
+    const session = await getOrCreateCurrentUser(request);
     const project = await getProject(projectId);
-    if (!project || project.ownerId !== user.id) return jsonError(new Error("Project not found"), 404);
+    if (!project || project.ownerId !== session.user.id) return jsonError(new Error("Project not found"), 404);
     const result = await rollbackVersion(projectId, body.versionId);
     const html = await readArtifact(result.version);
-    return jsonOk({ ...result, html });
+    const response = jsonOk({ ...result, html });
+    if (session.setCookie) response.headers.append("Set-Cookie", session.setCookie);
+    return response;
   } catch (error) {
     return jsonError(error);
   }
