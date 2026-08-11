@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getCurrentUser } from "@/lib/auth";
 import { jsonError, jsonOk } from "@/lib/http";
 import { importHtml, readArtifact } from "@/lib/store";
 import { validateHtml } from "@/lib/validation";
@@ -14,9 +15,11 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
+    const user = await getCurrentUser(request);
     const validationReport = validateHtml(body.html);
     const result = await importHtml({
       projectId: body.projectId,
+      ownerId: user.id,
       title: body.title,
       html: body.html,
       validationReport

@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { getCurrentUser } from "@/lib/auth";
+import { enqueueRemix } from "@/lib/generation-queue";
 import { jsonError, jsonOk } from "@/lib/http";
-import { runRemix } from "@/lib/workflows";
+import { getProject } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -25,15 +27,18 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
   try {
     const body = requestSchema.parse(await request.json());
     const { projectId } = await params;
-    const result = await runRemix({
+    const user = await getCurrentUser(request);
+    const project = await getProject(projectId);
+    if (!project || project.ownerId !== user.id) return jsonError(new Error("Project not found"), 404);
+    const run = await enqueueRemix({
       projectId,
-      ...body
+      ...body,
+      ownerId: user.id
     });
     return jsonOk({
-      project: result.project,
-      version: result.version,
-      run: result.run,
-      html: result.html
+      runId: run.id,
+      status: run.status,
+      run
     });
   } catch (error) {
     return jsonError(error);

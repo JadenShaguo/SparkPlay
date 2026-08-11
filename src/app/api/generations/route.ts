@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { getCurrentUser } from "@/lib/auth";
+import { enqueueGeneration } from "@/lib/generation-queue";
 import { jsonError, jsonOk } from "@/lib/http";
-import { runGeneration } from "@/lib/workflows";
 
 export const dynamic = "force-dynamic";
 
@@ -23,12 +24,12 @@ const requestSchema = z.object({
 export async function POST(request: Request) {
   try {
     const body = requestSchema.parse(await request.json());
-    const result = await runGeneration(body);
+    const user = await getCurrentUser(request);
+    const run = await enqueueGeneration({ ...body, ownerId: user.id });
     return jsonOk({
-      project: result.project,
-      version: result.version,
-      run: result.run,
-      html: result.html
+      runId: run.id,
+      status: run.status,
+      run
     });
   } catch (error) {
     return jsonError(error);

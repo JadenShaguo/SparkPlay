@@ -4,6 +4,21 @@ export type SafetyStatus = "pending" | "approved" | "blocked";
 
 export type VersionSourceKind = "generate" | "remix" | "rollback" | "import" | "repair";
 
+export type GenerationRunStatus =
+  | "queued"
+  | "running"
+  | "planning"
+  | "generating"
+  | "validating"
+  | "repairing"
+  | "smoking"
+  | "moderating"
+  | "persisting"
+  | "success"
+  | "failed";
+
+export type AnalyticsEventType = "shareOpen" | "playStart" | "playComplete" | "remixClick";
+
 export interface User {
   id: string;
   name: string;
@@ -17,7 +32,9 @@ export interface AssetRef {
   name: string;
   mimeType: string;
   dataUrl: string;
+  objectKey?: string;
   bytes: number;
+  checksum?: string;
 }
 
 export interface PlayableManifest {
@@ -26,6 +43,7 @@ export interface PlayableManifest {
   category: string;
   tags: string[];
   controls: string[];
+  plan?: PlayablePlan;
   assetRefs: AssetRef[];
   thumbnail?: string;
   sourcePrompt: string;
@@ -36,10 +54,32 @@ export interface PlayableManifest {
   safetyStatus: SafetyStatus;
 }
 
+export interface PlayablePlan {
+  title: string;
+  coreLoop: string;
+  goal: string;
+  controls: string[];
+  scoring: string;
+  states: string[];
+  endCondition: string;
+  restartBehavior: string;
+  visualStyle: string;
+}
+
 export interface ValidationReport {
   valid: boolean;
   issues: string[];
   warnings: string[];
+  contract?: PlayableContractReport;
+}
+
+export interface PlayableContractReport {
+  valid: boolean;
+  checks: Array<{
+    key: "goal" | "interaction" | "feedback" | "state" | "endState" | "restart";
+    passed: boolean;
+    message: string;
+  }>;
 }
 
 export interface Project {
@@ -47,7 +87,7 @@ export interface Project {
   ownerId: string;
   title: string;
   description: string;
-  visibility: "private" | "public";
+  visibility: "private" | "unlisted" | "public";
   currentVersionId: string;
   rootVersionId: string;
   savedAt: string | null;
@@ -70,9 +110,28 @@ export interface PlayableVersion {
   manifest: PlayableManifest;
   validationReport: ValidationReport;
   artifactPath: string;
+  artifactKey?: string;
+  thumbnailKey?: string;
+  smokeReport?: SmokeReport;
   htmlBytes: number;
   generationRunId?: string;
   createdAt: string;
+}
+
+export interface SmokeReport {
+  status: "passed" | "failed" | "skipped";
+  issues: string[];
+  warnings: string[];
+  durationMs: number;
+  checkedAt: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  consoleErrors: string[];
+  screenshotBytes?: number;
+  interactionTested?: boolean;
+  visualChangeDetected?: boolean;
 }
 
 export interface GenerationRun {
@@ -80,7 +139,7 @@ export interface GenerationRun {
   projectId: string;
   mode: GenerationMode | "remix";
   prompt: string;
-  status: "queued" | "running" | "success" | "failed";
+  status: GenerationRunStatus;
   startedAt: string;
   completedAt?: string;
   durationMs?: number;
@@ -96,6 +155,15 @@ export interface GenerationRun {
   repairCount: number;
   model: string;
   error?: string;
+}
+
+export interface AnalyticsEvent {
+  id: string;
+  type: AnalyticsEventType;
+  shareSlug?: string;
+  projectId?: string;
+  versionId?: string;
+  createdAt: string;
 }
 
 export interface SessionMessage {
@@ -129,6 +197,32 @@ export interface RemixLineage {
   createdAt: string;
 }
 
+export interface PublicProjectCard {
+  project: Project;
+  currentVersion: PlayableVersion | null;
+  author: User;
+  shareSlug?: string;
+  remixCount: number;
+  shareOpens: number;
+  basedOn?: {
+    project: Project;
+    version: PlayableVersion | null;
+    author: User;
+  };
+}
+
+export interface UserProfile {
+  user: User;
+  stats: {
+    publicProjectCount: number;
+    remixProjectCount: number;
+    totalShareOpens: number;
+    totalRemixCount: number;
+  };
+  publicProjects: PublicProjectCard[];
+  remixProjects: PublicProjectCard[];
+}
+
 export interface Template {
   id: string;
   title: string;
@@ -157,4 +251,5 @@ export interface DatabaseShape {
   remixLineages: RemixLineage[];
   templates: Template[];
   moderationReviews: ModerationReview[];
+  analyticsEvents: AnalyticsEvent[];
 }
