@@ -9,8 +9,8 @@ SparkPlay 的重点不是让用户看到“AI 写了一段代码”，而是让�
 SparkPlay 提供从创意输入到公开试玩的完整闭环：
 
 1. 创作者在工作台输入想要生成的互动内容、玩法目标和视觉风格。
-2. 系统根据 prompt 和上传素材生成一个移动端优先的 HTML playable。
-3. 生成结果立即出现在手机框中，用户可以直接试玩。
+2. 系统创建生成任务，并根据 prompt、模式和上传素材生成一个移动端优先的 HTML playable。
+3. 生成结果出现在手机框中，用户可以直接试玩，也可以在右侧查看生成阶段。
 4. 如果结果不满意，可以点击重新生成，或通过 Remix 输入框用自然语言修改当前版本。
 5. 每一次生成、Remix、导入和回滚都会创建独立版本。
 6. 用户可以创建固定版本分享链接，让他人在未登录状态下打开试玩。
@@ -80,6 +80,10 @@ SparkPlay 可以作为 AI UGC playable 的基础平台，用来验证生成成�
 
 手机右侧展示生成过程，包括接收指令、生成小游戏、安全校验、写入版本和预览就绪。面板也展示最近版本，并提供回滚入口。
 
+### 异步生成任务
+
+生成和 Remix 请求会先创建 `GenerationRun`，前端通过轮询查询任务状态。这样可以避免长耗时模型请求阻塞页面，也能在生成失败时保留旧预览并给出可理解错误。
+
 ### 版本管理
 
 SparkPlay 使用不可变版本机制。每次生成、Remix、导入或回滚都会创建新的 version，旧版本不会被覆盖。分享链接绑定固定版本，后续修改不会影响已经分享出去的链接。
@@ -88,9 +92,23 @@ SparkPlay 使用不可变版本机制。每次生成、Remix、导入或回滚�
 
 分享页可以在未登录状态下打开试玩。公开作品页面提供 Remix 入口，他人可以基于当前分享版本创建自己的分叉作品。
 
+### 发现页与公开主页
+
+`Discover` 页面展示公开作品，支持按最新、Remix 数和试玩数查看。用户公开主页展示作者公开作品、分享打开数和 Remix 数据，帮助作品从个人资产进入轻社交传播链路。
+
+### GitHub 登录
+
+SparkPlay 支持 GitHub OAuth 作为账号体系入口。GitHub 登录只用于身份识别，不会把作品同步到 GitHub 仓库，也不会请求仓库写入权限。
+
+本地开发时，如果未配置 GitHub OAuth，账户页点击“使用 GitHub 登录”会弹出配置窗口。用户可以手动输入 GitHub OAuth 参数，系统会把配置写入本机 `.env.local`，该文件默认被 `.gitignore` 忽略。
+
 ### HTML 导入
 
 用户可以导入外部工具生成的单文件 HTML，把它纳入 SparkPlay 的预览、版本、回滚和分享体系。
+
+### 精品示例作品
+
+项目内置 demo seed 脚本，可以生成一组视觉更完整的移动端 playable 示例，包括记忆翻牌、摘星挑战、跑酷、人格测试、生存选择、气球派对、像素宝箱和节拍舞台，用于填充作品库与发现页。
 
 ### 安全校验
 
@@ -107,6 +125,9 @@ SparkPlay 当前包含以下核心页面：
 | `Templates` | 模板库，提供常见玩法模板作为 prompt 起点。 |
 | `Account` | 本地资产统计，包括作品数、版本数、分享数和 Remix 数。 |
 | `Play` | 公网试玩页，用于打开固定版本分享链接并触发 Remix。 |
+| `Discover` | 公开作品发现页，展示公开 playable。 |
+| `Profile` | 用户公开主页，展示作者公开作品和 Remix 数据。 |
+| `Lineage` | Remix 关系页，展示作品的来源和衍生关系。 |
 
 ## 生成模式
 
@@ -139,33 +160,45 @@ Next.js App Router
   v
 应用服务层
   |
-  |-- workflows.ts          生成与 Remix 编排
-  |-- llm-provider.ts       模型网关适配
-  |-- playable-generator.ts 内置生成器
-  |-- validation.ts         HTML 安全校验
-  |-- store.ts              本地数据存储
+  |-- workflows.ts           生成与 Remix 编排
+  |-- generation-queue.ts    生成任务队列适配
+  |-- llm-provider.ts        模型网关适配
+  |-- playable-generator.ts  内置生成器
+  |-- playable-contract.ts   playable 质量合约
+  |-- validation.ts          HTML 安全校验
+  |-- auth.ts                GitHub OAuth 与本地登录会话
+  |-- store.ts               数据访问入口
+  |-- storage-adapter.ts     artifact 与缩略图存储
   |
   v
-本地数据层
+数据与 Artifact 层
   |
-  |-- data/db.json
-  |-- data/artifacts/*.html
+  |-- local-json: data/db.json
+  |-- artifacts: data/artifacts/*.html
+  |-- thumbnails: data/thumbnails/*
+  |-- postgres/prisma: 可选生产化数据层
 ```
 
 ## 目录结构
 
 ```text
 src/app
-  API 路由、页面入口、分享页和全局样式
+  API 路由、页面入口、分享页、发现页、公开主页和全局样式
 
 src/components
-  SparkPlay Studio 主创作台组件
+  SparkPlay Studio 主创作台、公开作品卡片和试玩页客户端组件
 
 src/lib
-  生成工作流、模型网关、内置生成器、版本存储和 HTML 校验
+  生成工作流、任务队列、模型网关、内置生成器、账号、版本存储、缩略图和 HTML 校验
 
 src/types
   Project、PlayableVersion、GenerationRun、Template 等领域类型
+
+prisma
+  Postgres 数据模型，用于后续生产化数据层
+
+scripts
+  脱敏扫描、demo 作品生成、本地 JSON 迁移脚本
 
 data
   本地运行数据目录，保存元数据和 HTML artifact
@@ -202,6 +235,14 @@ ENVIRONMENT.md
 
 分享链接实体。每个分享链接绑定固定 project 和 version，保证公开链接不会被后续编辑影响。
 
+### RemixLineage
+
+Remix 血缘关系实体，用于记录一个作品从哪个固定版本 fork 而来，并支持后续展示作品来源和衍生关系。
+
+### AnalyticsEvent
+
+轻量事件实体，用于记录分享打开、试玩开始、试玩完成和 Remix 点击等行为。
+
 ### Template
 
 玩法模板实体。模板用于快速填充 prompt，并引导用户生成常见互动玩法。
@@ -217,8 +258,17 @@ ENVIRONMENT.md
 | `/api/projects/:projectId/remix` | `POST` | 基于当前版本生成 Remix 新版本。 |
 | `/api/projects/:projectId/rollback` | `POST` | 基于历史版本创建回滚版本。 |
 | `/api/projects/:projectId/versions` | `GET` | 获取项目版本列表。 |
+| `/api/projects/:projectId/publish` | `POST` | 将作品发布为公开或非索引可访问状态。 |
+| `/api/projects/:projectId/unpublish` | `POST` | 将作品转回私密状态。 |
+| `/api/projects/:projectId/lineage` | `GET` | 查询作品 Remix 来源和衍生关系。 |
 | `/api/share-links` | `POST` | 创建固定版本分享链接。 |
 | `/api/share-links/:slug/remix` | `POST` | 从分享页 fork 到创作台。 |
+| `/api/public/projects` | `GET` | 获取公开作品列表。 |
+| `/api/users/:userId/profile` | `GET` | 获取用户公开主页数据。 |
+| `/api/events` | `POST` | 记录分享页试玩和 Remix 事件。 |
+| `/api/auth/github/start` | `GET` | 发起 GitHub OAuth 登录。 |
+| `/api/auth/github/callback` | `GET` | 处理 GitHub OAuth 回调并写入会话。 |
+| `/api/local-config/github-oauth` | `GET/POST` | 本地开发 GitHub OAuth 配置助手。 |
 | `/api/import` | `POST` | 导入外部 HTML 为 SparkPlay 版本。 |
 | `/play/:slug` | `GET` | 打开公开试玩页。 |
 
@@ -243,6 +293,10 @@ SparkPlay 支持两种生成方式：
 
 配置模型网关后，SparkPlay 会请求 Responses API 兼容接口生成完整 HTML 和 manifest。模型输出会经过结构解析和 HTML 安全校验。遇到上游 504 时，系统会给出明确错误提示，并尝试降低 reasoning effort 进行重试。
 
+### Codex 配置复用
+
+本地开发可选择从本机 Codex 配置读取模型网关参数，用于减少重复配置。该能力仅建议本地调试使用，生产环境应通过服务端环境变量显式配置。
+
 ## 安全边界
 
 SparkPlay 默认把生成内容视为不可信内容，因此采用以下限制：
@@ -253,6 +307,8 @@ SparkPlay 默认把生成内容视为不可信内容，因此采用以下限制�
 - 生成 HTML 不允许 `fetch`、`XMLHttpRequest`、`WebSocket` 和 `sendBeacon`。
 - 分享链接绑定固定版本，避免后续编辑影响已公开内容。
 - 本地密钥只应通过环境变量配置，不应写入前端代码或文档。
+- `.env.local`、`data/`、`.next/` 和 `node_modules/` 默认不进入 Git。
+- 提交前可运行 `npm run secret:scan` 扫描 staged 文件中的真实 token、内部网关和敏感环境配置。
 
 ## 本地运行
 
@@ -282,11 +338,32 @@ npm run build
 npm test
 ```
 
+生成本地精品 demo 作品：
+
+```bash
+npm run demo:seed
+```
+
 ## 环境配置
 
 SparkPlay 不强制要求模型密钥。需要接入真实模型网关时，请参考 [ENVIRONMENT.md](./ENVIRONMENT.md)。
 
 请不要提交 `.env.local`、真实 token、私钥或内部网关凭据。
+
+### GitHub OAuth 本地配置
+
+本地开发有两种配置方式：
+
+1. 在账户页点击“使用 GitHub 登录”，弹出配置窗口后填写 GitHub OAuth 参数并保存。
+2. 手动编辑 `.env.local`，配置 `SPARKPLAY_PUBLIC_APP_URL`、`SPARKPLAY_AUTH_SECRET`、`SPARKPLAY_GITHUB_CLIENT_ID` 和 `SPARKPLAY_GITHUB_CLIENT_SECRET`。
+
+GitHub OAuth App 的回调地址格式为：
+
+```text
+http://localhost:3000/api/auth/github/callback
+```
+
+如果保存配置后登录仍失败，请重启开发服务，让 Next.js 重新加载 `.env.local`。
 
 ## 本地数据
 

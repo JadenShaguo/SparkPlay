@@ -25,6 +25,7 @@ import {
   UserCircle
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AssetRef, GenerationMode, GenerationRun, PlayableVersion, Project, Template, User } from "@/types/domain";
 
@@ -81,9 +82,22 @@ interface MeResponse {
   authenticated: boolean;
 }
 
+interface LocalGitHubConfigResponse {
+  writable: boolean;
+  configured: boolean;
+  appUrl: string;
+  needs: {
+    appUrl: boolean;
+    authSecret: boolean;
+    githubClientId: boolean;
+    githubClientSecret: boolean;
+  };
+}
+
 const activeRunStorageKey = "sparkplay.activeRunId";
 
 export function Studio({ templates }: StudioProps) {
+  const router = useRouter();
   const [tab, setTab] = useState<Tab>("create");
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<GenerationMode>("direct");
@@ -112,6 +126,16 @@ export function Studio({ templates }: StudioProps) {
   const [authenticated, setAuthenticated] = useState(false);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [libraryError, setLibraryError] = useState("");
+  const [githubConfigOpen, setGithubConfigOpen] = useState(false);
+  const [githubConfigSaving, setGithubConfigSaving] = useState(false);
+  const [githubConfigMessage, setGithubConfigMessage] = useState("");
+  const [githubConfigConfigured, setGithubConfigConfigured] = useState(false);
+  const [githubConfigForm, setGithubConfigForm] = useState({
+    appUrl: "http://localhost:3000",
+    authSecret: "",
+    githubClientId: "",
+    githubClientSecret: ""
+  });
   const resumeAttemptedRef = useRef(false);
 
   const activeProjectId = project?.id;
@@ -493,6 +517,58 @@ export function Studio({ templates }: StudioProps) {
     setTab("create");
   }
 
+  async function startGithubLogin() {
+    setGithubConfigMessage("");
+    try {
+      const response = await fetch("/api/local-config/github-oauth", { cache: "no-store" });
+      const data = (await response.json()) as LocalGitHubConfigResponse & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "读取 GitHub 登录配置失败");
+      setGithubConfigConfigured(data.configured);
+      setGithubConfigForm((prev) => ({
+        ...prev,
+        appUrl: data.appUrl || window.location.origin,
+        authSecret: prev.authSecret || createBrowserSecret()
+      }));
+      setGithubConfigOpen(true);
+      if (data.configured) {
+        setGithubConfigMessage("本地已经检测到 GitHub 登录配置，可以直接使用已有配置登录，也可以重新填写后覆盖。");
+      } else if (!data.writable) {
+        setGithubConfigMessage("当前环境不允许页面写入本地配置，请手动编辑 .env.local。");
+      }
+    } catch (error) {
+      setGithubConfigForm((prev) => ({
+        ...prev,
+        appUrl: window.location.origin,
+        authSecret: prev.authSecret || createBrowserSecret()
+      }));
+      setGithubConfigOpen(true);
+      setGithubConfigConfigured(false);
+      setGithubConfigMessage(error instanceof Error ? error.message : "读取 GitHub 登录配置失败");
+    }
+  }
+
+  async function saveGithubConfigAndLogin() {
+    setGithubConfigSaving(true);
+    setGithubConfigMessage("正在写入本地 .env.local");
+    try {
+      const response = await fetch("/api/local-config/github-oauth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(githubConfigForm)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "保存 GitHub 登录配置失败");
+      setGithubConfigMessage("配置已写入 .env.local，正在打开 GitHub 登录。若仍失败，请重启 npm run dev。");
+      window.setTimeout(() => {
+        router.push("/api/auth/github/start?returnTo=/");
+      }, 450);
+    } catch (error) {
+      setGithubConfigMessage(error instanceof Error ? error.message : "保存 GitHub 登录配置失败");
+    } finally {
+      setGithubConfigSaving(false);
+    }
+  }
+
   function startResize(event: React.PointerEvent<HTMLButtonElement>) {
     event.preventDefault();
     const startX = event.clientX;
@@ -787,10 +863,10 @@ export function Studio({ templates }: StudioProps) {
                       </button>
                     </form>
                   ) : (
-                    <Link href="/api/auth/github/start?returnTo=/">
+                    <button type="button" onClick={startGithubLogin}>
                       <Github size={15} />
                       使用 GitHub 登录
-                    </Link>
+                    </button>
                   )}
                 </div>
               </div>
@@ -802,7 +878,137 @@ export function Studio({ templates }: StudioProps) {
           </section>
         )}
       </section>
+      {githubConfigOpen && (
+        <GitHubConfigModal
+          form={githubConfigForm}
+          configured={githubConfigConfigured}
+          message={githubConfigMessage}
+          saving={githubConfigSaving}
+          onChange={setGithubConfigForm}
+          onClose={() => setGithubConfigOpen(false)}
+          onUseExistingConfig={() => router.push("/api/auth/github/start?returnTo=/")}
+          onGenerateSecret={() => setGithubConfigForm((prev) => ({ ...prev, authSecret: createBrowserSecret() }))}
+          onSubmit={saveGithubConfigAndLogin}
+        />
+      )}
     </main>
+  );
+}
+
+function GitHubConfigModal({
+  form,
+  configured,
+  message,
+  saving,
+  onChange,
+  onClose,
+  onUseExistingConfig,
+  onGenerateSecret,
+  onSubmit
+}: {
+  form: {
+    appUrl: string;
+    authSecret: string;
+    githubClientId: string;
+    githubClientSecret: string;
+  };
+  configured: boolean;
+  message: string;
+  saving: boolean;
+  onChange: React.Dispatch<React.SetStateAction<{
+    appUrl: string;
+    authSecret: string;
+    githubClientId: string;
+    githubClientSecret: string;
+  }>>;
+  onClose: () => void;
+  onUseExistingConfig: () => void;
+  onGenerateSecret: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="config-modal" role="dialog" aria-modal="true" aria-labelledby="github-config-title">
+        <header className="config-modal-header">
+          <div>
+            <p className="eyebrow">本地登录配置</p>
+            <h2 id="github-config-title">配置 GitHub 登录</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="关闭配置窗口">
+            ×
+          </button>
+        </header>
+        <p className="config-help">
+          这些参数只会写入本机 `.env.local`，不会进入 Git。GitHub OAuth App 的回调地址填写
+          <code>{`${form.appUrl.replace(/\/+$/, "")}/api/auth/github/callback`}</code>。
+        </p>
+        <form
+          className="config-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <label>
+            <span>应用地址</span>
+            <input
+              value={form.appUrl}
+              onChange={(event) => onChange((prev) => ({ ...prev, appUrl: event.target.value }))}
+              placeholder="http://localhost:3000"
+            />
+            <small>本地开发通常使用当前页面地址，例如 http://localhost:3000。</small>
+          </label>
+          <label>
+            <span>登录签名密钥 SPARKPLAY_AUTH_SECRET</span>
+            <div className="input-row">
+              <input
+                value={form.authSecret}
+                onChange={(event) => onChange((prev) => ({ ...prev, authSecret: event.target.value }))}
+                placeholder="建议使用随机长字符串"
+                type="password"
+              />
+              <button className="plain-action" type="button" onClick={onGenerateSecret}>
+                生成
+              </button>
+            </div>
+            <small>用于签名 SparkPlay 登录 Cookie，不是 GitHub 密钥。</small>
+          </label>
+          <label>
+            <span>GitHub Client ID</span>
+            <input
+              value={form.githubClientId}
+              onChange={(event) => onChange((prev) => ({ ...prev, githubClientId: event.target.value }))}
+              placeholder="GitHub OAuth App 的 Client ID"
+            />
+            <small>GitHub Settings / Developer settings / OAuth Apps 中创建后获取。</small>
+          </label>
+          <label>
+            <span>GitHub Client Secret</span>
+            <input
+              value={form.githubClientSecret}
+              onChange={(event) => onChange((prev) => ({ ...prev, githubClientSecret: event.target.value }))}
+              placeholder="GitHub OAuth App 的 Client Secret"
+              type="password"
+            />
+            <small>只写入本地 `.env.local`，界面不会读取或回显已有 secret。</small>
+          </label>
+          {message && <div className="config-message">{message}</div>}
+          <div className="config-actions">
+            <button className="plain-action" type="button" onClick={onClose}>
+              取消
+            </button>
+            {configured && (
+              <button className="plain-action" type="button" onClick={onUseExistingConfig}>
+                使用已有配置登录
+              </button>
+            )}
+            <button className="secondary-action" type="submit" disabled={saving}>
+              {saving ? "保存中" : "保存并继续登录"}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   );
 }
 
@@ -832,6 +1038,12 @@ function Metric({ label, value }: { label: string; value: number }) {
       <span>{label}</span>
     </div>
   );
+}
+
+function createBrowserSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function EmptyPreview({ busy }: { busy: boolean }) {
